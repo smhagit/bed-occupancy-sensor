@@ -18,6 +18,13 @@
 // ...
 // ...
 // ...
+/** HX711 Load Cell Sensor **/
+/** -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- **/
+#include <HX711_ADC.h>
+const int HX711_DATA = D5;
+const int HX711_SLCK = D6;
+
+HX711_ADC LoadCell(HX711_DATA, HX711_SLCK);
 
  
 
@@ -59,9 +66,9 @@ Ticker mqttReconnectTimer;
 static bool WIFI_STATUS = false;
 static bool MQTT_STATUS = false;
 
-static const char MQTT_PUBLISH_TOPIC[] = "esp8266/sensor/SENSOR_NAME/TITLE";
-static const char MQTT_SENSOR_NAME[] = "esp-SENSOR";
-static const char MQTT_NAME[] = "esp sensor description";
+static const char MQTT_PUBLISH_TOPIC[] = "esp8266/sensor/bed-occupancy/weight";
+static const char MQTT_SENSOR_NAME[] = "esp-bed-ocupancy";
+static const char MQTT_NAME[] = "Bed occupancy weight sensor";
 
 
 /**
@@ -94,8 +101,22 @@ void setup() {
   // ...
   // ...
   // ...
+  LoadCell.begin();
+  unsigned long stabilizingtime = 2000; // preciscion right after power-up can be improved by adding a few seconds of stabilizing time
+  boolean _tare = true; //set this to false if you don't want tare to be performed in the next step
+  LoadCell.start(stabilizingtime, _tare);
+  if (LoadCell.getTareTimeoutFlag() || LoadCell.getSignalTimeoutFlag()) {
+    Serial.println("LoadCell: Timeout, check MCU>HX711 wiring and pin designations");
+    while (1);
+  }
+  else {
+    LoadCell.setCalFactor(1.0); // user set calibration value (float), initial value 1.0 may be used for this sketch
+    Serial.println("LoadCell: Startup is complete");
+  }
+  while (!LoadCell.update());
+  //calibrate(); //start calibration procedure
+  //Serial.println("LoadCell: calibrate");
 
-  
  
   
   Serial.println("== [SETUP]: completed ==");
@@ -118,6 +139,21 @@ void loop() {
   // ...
   // ...
 
+  const int serialPrintInterval = 2; //increase value to slow down serial print activity
+  bool newDataReady = false;
+  float loadCellWeight;
+
+  if (LoadCell.update()) newDataReady = true;
+
+  // get smoothed value from the dataset:
+  if (newDataReady) {
+      loadCellWeight = LoadCell.getData();
+      Serial.print("Load_cell output val: ");
+      Serial.println(loadCellWeight);
+  }
+
+  delay(300);
+  return;
 
 
   // Publish sensor data via MQTT
@@ -125,7 +161,7 @@ void loop() {
   payload["sensor"] = MQTT_SENSOR_NAME;
   payload["name"] = MQTT_NAME;
   payload["time"] = 1351824120;
-  payload["YOUR_SENSOR_DATA"] = SENSOR_DATA;
+  payload["loadCellWeight"] = loadCellWeight;
 
   // Convert payload to a json String and then into a char array for MQTT transport
   String jsonString;
