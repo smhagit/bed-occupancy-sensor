@@ -1,30 +1,27 @@
 /*******************************************************************************************
-* Basic starter template as a good point to start a new script
 * Features:
 *   - WiFi connection/ reconnection
 *   - MQTT connection/ reconnection
-*   - Publish and subscrice to MQTT topics to send data or listen for remote calls
+*   - Publish data to MQTT topic
+*   - Two HX711 LoadCell sensors
 * Created for a ESP8266/ NodeMCU project
 * 
-* Attention: !!! THIS IS WORK IN PROGRESS !!!
 * 
 * ******************************************************************************************
 */
 
 
-/** YOUR CUSTOM SENSOR CODE **/
-/** -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- **/
-// ...
-// ...
-// ...
-// ...
 /** HX711 Load Cell Sensor **/
 /** -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- **/
 #include <HX711_ADC.h>
-const int HX711_DATA = D5;
-const int HX711_SLCK = D6;
+const int HX711_DATA_LEFT = D7;
+const int HX711_SLCK_LEFT = D6;
 
-HX711_ADC LoadCell(HX711_DATA, HX711_SLCK);
+const int HX711_DATA_RIGHT = D3;
+const int HX711_SLCK_RIGHT = D2;
+
+HX711_ADC LoadCell_left(HX711_DATA_LEFT, HX711_SLCK_LEFT);
+HX711_ADC LoadCell_right(HX711_DATA_RIGHT, HX711_SLCK_RIGHT);
 
  
 
@@ -37,8 +34,8 @@ HX711_ADC LoadCell(HX711_DATA, HX711_SLCK);
 #include <ESP8266WiFi.h>
 #include <Ticker.h>
 
-#define WIFI_SSID "YOU_WLAN_SSID"
-#define WIFI_PASSWORD "YOUR_WLAN_PASSWORD"
+#define WIFI_SSID "<YOUR WIFI SSID>"
+#define WIFI_PASSWORD "<WIFI PASSWORD>"
 
 WiFiEventHandler wifiConnectHandler;
 WiFiEventHandler wifiDisconnectHandler;
@@ -52,8 +49,8 @@ Ticker wifiReconnectTimer;
 
 #define MQTT_HOST IPAddress(192, 168, 2, 83)
 #define MQTT_PORT 1883
-static const char mqttUser[] = "YOUR_USER";
-static const char mqttPassword[] = "YOUR_PASSWORD";
+static const char mqttUser[] = "bedsensor";
+static const char mqttPassword[] = "<MQTT USER PASSWORD>";
 
 AsyncMqttClient mqttClient;
 Ticker mqttReconnectTimer;
@@ -66,9 +63,14 @@ Ticker mqttReconnectTimer;
 static bool WIFI_STATUS = false;
 static bool MQTT_STATUS = false;
 
-static const char MQTT_PUBLISH_TOPIC[] = "esp8266/sensor/bed-occupancy/weight";
-static const char MQTT_SENSOR_NAME[] = "esp-bed-ocupancy";
-static const char MQTT_NAME[] = "Bed occupancy weight sensor";
+static const char MQTT_PUBLISH_TOPIC_LEFT[] = "esp8266/sensor/bed-occupancy/left/state";
+static const char MQTT_SENSOR_NAME_LEFT[] = "bed-ocupancy-left";
+static const char MQTT_NAME_LEFT[] = "Left bed occupancy sensor";
+
+
+static const char MQTT_PUBLISH_TOPIC_RIGHT[] = "esp8266/sensor/bed-occupancy/right/state";
+static const char MQTT_SENSOR_NAME_RIGHT[] = "bed-ocupancy-right";
+static const char MQTT_NAME_RIGHT[] = "Right bed occupancy sensor";
 
 
 /**
@@ -76,6 +78,8 @@ static const char MQTT_NAME[] = "Bed occupancy weight sensor";
  */
 void setup() {
   Serial.begin(9600);
+  delay(3000);
+
   Serial.println("== [SETUP]: started ==");
 
  
@@ -85,40 +89,70 @@ void setup() {
   mqttClient.onMessage(onMqttMessage);
   mqttClient.setServer(MQTT_HOST, MQTT_PORT);
   mqttClient.setCredentials(mqttUser, mqttPassword);
+  
 
   
   // Setup WiFi
   wifiConnectHandler = WiFi.onStationModeGotIP(onWifiConnect);
   wifiDisconnectHandler = WiFi.onStationModeDisconnected(onWifiDisconnect);
+    WiFi.onEvent([](WiFiEvent_t e) {
+        Serial.printf("Event wifi -----> %d\n", e);
+
+        switch(e) {
+          case WIFI_EVENT_STAMODE_GOT_IP:
+            Serial.println("WiFi connected");
+            Serial.println("IP address: ");
+            Serial.println(WiFi.localIP());
+
+            connectToMqtt();
+            Serial.println("== [SETUP]: MQTT ready ==");
+
+            break;
+          case WIFI_EVENT_STAMODE_DISCONNECTED:
+            Serial.println("WiFi lost connection");
+            break;
+        }
+
+    });
   connectToWifi();
-  Serial.println("WiFi connected!");
+  Serial.println("== [SETUP]: WiFi ready ==");
 
 
-  
-  // YOUR CUSTOM SENSOR INITIALIZATION STFF
-  // ---    ---    ---    ---    ---    ---    ---    ---    ---    ---    ---    
-  // ...
-  // ...
-  // ...
-  // ...
-  LoadCell.begin();
   unsigned long stabilizingtime = 2000; // preciscion right after power-up can be improved by adding a few seconds of stabilizing time
   boolean _tare = true; //set this to false if you don't want tare to be performed in the next step
-  LoadCell.start(stabilizingtime, _tare);
-  if (LoadCell.getTareTimeoutFlag() || LoadCell.getSignalTimeoutFlag()) {
-    Serial.println("LoadCell: Timeout, check MCU>HX711 wiring and pin designations");
-    while (1);
+
+  // Setup HX711 left
+  LoadCell_left.begin();
+  LoadCell_left.start(stabilizingtime, _tare);
+  if (LoadCell_left.getTareTimeoutFlag() || LoadCell_left.getSignalTimeoutFlag()) {
+    Serial.println("== [SETUP]: Error: check loadcell_left wiring and/or pins ==");
   }
   else {
-    LoadCell.setCalFactor(1.0); // user set calibration value (float), initial value 1.0 may be used for this sketch
-    Serial.println("LoadCell: Startup is complete");
+    LoadCell_left.setCalFactor(1.0); // user set calibration value (float)
+    Serial.println("== [SETUP]: loadcell_left ready ==");
   }
-  while (!LoadCell.update());
+  while (!LoadCell_left.update());
   //calibrate(); //start calibration procedure
   //Serial.println("LoadCell: calibrate");
 
- 
+
+  delay(200);
+
+    // Setup HX711 left
+  LoadCell_right.begin();
+  LoadCell_right.start(stabilizingtime, _tare);
+  if (LoadCell_right.getTareTimeoutFlag() || LoadCell_right.getSignalTimeoutFlag()) {
+    Serial.println("== [SETUP]: Error: check loadcell_right wiring and/or pins ==");
+  }
+  else {
+    LoadCell_right.setCalFactor(1.0); // user set calibration value (float)
+    Serial.println("== [SETUP]: loadcell_right ready ==");
+  }
+  while (!LoadCell_right.update());
+  //calibrate(); //start calibration procedure
+  //Serial.println("LoadCell: calibrate");
   
+
   Serial.println("== [SETUP]: completed ==");
 }
 
@@ -131,37 +165,59 @@ void setup() {
  * LOOP
  */
 void loop() {
-  // GET DATA FROM YOUR SENSOR
-  // ---    ---    ---    ---    ---    ---    ---    ---    ---    ---    ---    
-  const int SENSOR_DATA = 123455;
-  // ...
-  // ...
-  // ...
-  // ...
-
+  
   const int serialPrintInterval = 2; //increase value to slow down serial print activity
   bool newDataReady = false;
-  float loadCellWeight;
+  float loadCellWeight_left;
+  float loadCellWeight_right;
 
-  if (LoadCell.update()) newDataReady = true;
-
+  if (LoadCell_left.update()) newDataReady = true;
   // get smoothed value from the dataset:
   if (newDataReady) {
-      loadCellWeight = LoadCell.getData();
-      Serial.print("Load_cell output val: ");
-      Serial.println(loadCellWeight);
+      loadCellWeight_left = LoadCell_left.getData();
+      Serial.print("LoadCell_LEFT output val: ");
+      Serial.println(loadCellWeight_left);
   }
-
+  newDataReady = false;
   delay(300);
+
+
+  if (LoadCell_right.update()) newDataReady = true;
+  // get smoothed value from the dataset:
+  if (newDataReady) {
+      loadCellWeight_right = LoadCell_right.getData();
+      Serial.print("LoadCell_RIGHT output val: ");
+      Serial.println(loadCellWeight_right);
+  }
+  newDataReady = false;
+  delay(300);
+
+  Serial.print("Start publishing to MQTT...");
+
+
+  publishToMqtt(MQTT_SENSOR_NAME_LEFT, MQTT_NAME_LEFT, MQTT_PUBLISH_TOPIC_LEFT, loadCellWeight_left);
+  publishToMqtt(MQTT_SENSOR_NAME_RIGHT, MQTT_NAME_RIGHT, MQTT_PUBLISH_TOPIC_RIGHT, loadCellWeight_right);
+
+
+  delay(1000 * 2);
   return;
+  
+}
+
+/** -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- **/
 
 
+
+/**
+ * Publish data to mqtt
+ */
+void publishToMqtt(const char* sensorName, const char* mqttName, const char* topic, float value) {
   // Publish sensor data via MQTT
   StaticJsonDocument<400> payload;
-  payload["sensor"] = MQTT_SENSOR_NAME;
-  payload["name"] = MQTT_NAME;
+  payload["sensor"] = sensorName;
+  payload["name"] = mqttName;
   payload["time"] = 1351824120;
-  payload["loadCellWeight"] = loadCellWeight;
+  payload["loadCellValue"] = value;
 
   // Convert payload to a json String and then into a char array for MQTT transport
   String jsonString;
@@ -173,10 +229,14 @@ void loop() {
   Serial.println(mqttPayload);
 
   // Publish
-  uint16_t packetIdPub1 = mqttClient.publish(MQTT_PUBLISH_TOPIC, 1, true, mqttPayload);
+  uint16_t packetIdPub1 = mqttClient.publish(topic, 1, true, mqttPayload);
   Serial.println("[MQTT]: Publish sensor data via MQTT");
 
-  delay(1000 * 2);
+  if (MQTT_STATUS) {
+    Serial.println("[MQTT]: STATUS OK");    
+  } else {
+    Serial.println("[MQTT]: STATUS NOT!! OK");
+  }
 }
 
 
@@ -200,8 +260,8 @@ void onMqttConnect(bool sessionPresent) {
   Serial.println("[MQTT]: Connected to MQTT");
   MQTT_STATUS = true;
 
-  uint16_t packetIdSub = mqttClient.subscribe("esp8266/sensor/SENSOR_NAME/command/ping", 0);
-  Serial.print("Subscribing to COMMAND topic");
+  // uint16_t packetIdSub = mqttClient.subscribe("esp8266/sensor/SENSOR_NAME/command/ping", 0);
+  // Serial.print("Subscribing to COMMAND topic");
 }
 
 /**
@@ -209,6 +269,29 @@ void onMqttConnect(bool sessionPresent) {
  */
 void onMqttDisconnect(AsyncMqttClientDisconnectReason reason) {
   Serial.println("Disconnected from MQTT");
+  String text;
+  switch( reason) {
+  case AsyncMqttClientDisconnectReason::TCP_DISCONNECTED:
+     text = "TCP_DISCONNECTED"; 
+     break; 
+  case AsyncMqttClientDisconnectReason::MQTT_UNACCEPTABLE_PROTOCOL_VERSION:
+     text = "MQTT_UNACCEPTABLE_PROTOCOL_VERSION"; 
+     break; 
+  case AsyncMqttClientDisconnectReason::MQTT_IDENTIFIER_REJECTED:
+     text = "MQTT_IDENTIFIER_REJECTED";  
+     break;
+  case AsyncMqttClientDisconnectReason::MQTT_SERVER_UNAVAILABLE: 
+     text = "MQTT_SERVER_UNAVAILABLE"; 
+     break;
+  case AsyncMqttClientDisconnectReason::MQTT_MALFORMED_CREDENTIALS:
+     text = "MQTT_MALFORMED_CREDENTIALS"; 
+     break;
+  case AsyncMqttClientDisconnectReason::MQTT_NOT_AUTHORIZED:
+     text = "MQTT_NOT_AUTHORIZED"; 
+     break;
+  }
+
+  Serial.printf(" [%8u] Disconnected from the broker reason = %s\n", millis(), text.c_str() );
 
   if (WiFi.isConnected()) {
     mqttReconnectTimer.once(2, connectToMqtt);
